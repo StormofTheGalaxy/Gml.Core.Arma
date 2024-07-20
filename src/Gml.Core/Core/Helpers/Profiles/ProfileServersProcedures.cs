@@ -66,12 +66,12 @@ public partial class ProfileProcedures : IProfileServersProcedures
                 };
 
                 IServerQuery steam = new ServerQuery(options.Address, options.Port);
-                var status = steam?.GetServerInfoAsync();
+                var status = await steam.GetServerInfoAsync();
 
-                minecraftServer.Online = status?.Result.Players;
-                minecraftServer.MaxOnline = status?.Result.MaxPlayers;
-                minecraftServer.Version = status?.Result.Name ?? string.Empty;
-                minecraftServer.IsOnline = status?.Result.MaxPlayers is not null;
+                minecraftServer.Online = status?.Players;
+                minecraftServer.MaxOnline = status?.MaxPlayers;
+                minecraftServer.Version = status?.Name ?? string.Empty;
+                minecraftServer.IsOnline = status?.MaxPlayers is not null;
             }
             catch (Exception exception)
             {

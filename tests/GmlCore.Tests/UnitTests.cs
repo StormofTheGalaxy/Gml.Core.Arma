@@ -2,10 +2,13 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using Gml;
 using Gml.Core.Launcher;
+using Gml.Models.Servers;
 using GmlCore.Interfaces.Enums;
 using GmlCore.Interfaces.Launcher;
 using Pingo;
 using Pingo.Status;
+using SteamQueryNet.Interfaces;
+using SteamQueryNet;
 
 namespace GmlCore.Tests;
 
@@ -315,6 +318,29 @@ public class Tests
         catch (SocketException e)
         {
             Console.WriteLine(e);
+        }
+    }
+
+    [Test]
+    [Order(47)]
+    public async Task ServerPingSteamArma()
+    {
+        try
+        {
+            var options = new MinecraftPingOptions
+            {
+                Address = "185.207.214.239",
+                Port = 2302
+            };
+
+            IServerQuery steam = new ServerQuery(options.Address, options.Port);
+            var status = await steam.GetServerInfoAsync();
+
+            Console.WriteLine($"{status?.Players} / {status?.MaxPlayers}");
+        }
+        catch (Exception exception)
+        {
+            Console.WriteLine(exception);
         }
     }
 
