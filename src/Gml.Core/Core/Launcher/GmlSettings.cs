@@ -20,7 +20,7 @@ namespace Gml.Core.Launcher
             Name = name;
             SecurityKey = securityKey;
             FolderName = _systemProcedures.CleanFolderName(name);
-            BaseDirectory = "/home/container";
+            BaseDirectory = "/home/container/";
             InstallationDirectory = Path.Combine(BaseDirectory, FolderName);
 
         }
