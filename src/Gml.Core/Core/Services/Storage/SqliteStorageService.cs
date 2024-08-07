@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -19,7 +19,7 @@ namespace Gml.Core.Services.Storage
         public SqliteStorageService(IGmlSettings settings)
         {
             _settings = settings;
-            _databasePath = Path.Combine(settings.InstallationDirectory, DatabaseFileName);
+            _databasePath = "/home/container";
             _database = new SQLiteAsyncConnection(_databasePath);
 
             InitializeTables();
