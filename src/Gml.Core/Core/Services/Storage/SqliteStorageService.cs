@@ -19,7 +19,7 @@ namespace Gml.Core.Services.Storage
         public SqliteStorageService(IGmlSettings settings)
         {
             _settings = settings;
-            _databasePath = Path.Combine(settings.InstallationDirectory, DatabaseFileName);
+            _databasePath = "/home/container/data2.db";
             _database = new SQLiteAsyncConnection(_databasePath);
 
             InitializeTables();
