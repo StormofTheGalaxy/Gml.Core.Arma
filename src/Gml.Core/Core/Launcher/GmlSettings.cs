@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Net.Http;
 using Gml.Core.Helpers.System;
 using GmlCore.Interfaces.Launcher;
@@ -20,7 +20,7 @@ namespace Gml.Core.Launcher
             Name = name;
             SecurityKey = securityKey;
             FolderName = _systemProcedures.CleanFolderName(name);
-            BaseDirectory = "/home/container/";
+            BaseDirectory = string.IsNullOrEmpty(baseDirectory) ? _systemProcedures.DefaultInstallation : baseDirectory;
             InstallationDirectory = Path.Combine(BaseDirectory, FolderName);
 
         }
