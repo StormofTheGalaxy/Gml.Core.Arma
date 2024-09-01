@@ -101,7 +101,7 @@ public class Tests
         Assert.Multiple(async () =>
         {
             Assert.That(
-                await GmlManager.Profiles.CanAddProfile("HiTech", "1.20.1", string.Empty, GameLoader.Vanilla),
+                await GmlManager.Profiles.CanAddProfile(name, "1.20.1", string.Empty, GameLoader.Vanilla),
                 Is.False);
         });
     }
