@@ -8,6 +8,9 @@ using GmlCore.Interfaces.Procedures;
 using GmlCore.Interfaces.Servers;
 using Pingo;
 using Pingo.Status;
+using SteamQueryNet.Interfaces;
+using SteamQueryNet;
+using SteamQueryNet.Models;
 
 namespace Gml.Core.Helpers.Profiles;
 
@@ -62,12 +65,13 @@ public partial class ProfileProcedures : IProfileServersProcedures
                     Port = (ushort)minecraftServer.Port
                 };
 
-                var status = await Minecraft.PingAsync(options) as JavaStatus;
+                IServerQuery steam = new ServerQuery(options.Address, options.Port);
+                var status = await steam.GetServerInfoAsync();
 
-                minecraftServer.Online = status?.OnlinePlayers;
-                minecraftServer.MaxOnline = status?.MaximumPlayers;
+                minecraftServer.Online = status?.Players;
+                minecraftServer.MaxOnline = status?.MaxPlayers;
                 minecraftServer.Version = status?.Name ?? string.Empty;
-                minecraftServer.IsOnline = status?.MaximumPlayers is not null;
+                minecraftServer.IsOnline = status?.MaxPlayers is not null;
             }
             catch (Exception exception)
             {
