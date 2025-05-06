@@ -15,6 +15,7 @@ using CmlLib.Core.Installer.Forge;
 using CmlLib.Core.Installer.Forge.Versions;
 using CmlLib.Core.ModLoaders.FabricMC;
 using CmlLib.Core.ModLoaders.LiteLoader;
+using CmlLib.Core.ModLoaders.QuiltMC;
 using CmlLib.Core.VersionMetadata;
 using CommunityToolkit.Diagnostics;
 using Gml.Common;
@@ -24,11 +25,13 @@ using Gml.Core.Helpers.Game;
 using Gml.Core.Launcher;
 using Gml.Core.Services.Storage;
 using Gml.Models;
+using Gml.Models.Mods;
 using Gml.Models.System;
 using Gml.Web.Api.Domains.System;
 using GmlCore.Interfaces.Bootstrap;
 using GmlCore.Interfaces.Enums;
 using GmlCore.Interfaces.Launcher;
+using GmlCore.Interfaces.Mods;
 using GmlCore.Interfaces.Procedures;
 using GmlCore.Interfaces.System;
 using GmlCore.Interfaces.User;
@@ -56,6 +59,7 @@ namespace Gml.Core.Helpers.Profiles
         private ConcurrentDictionary<string, string> _fileHashCache = new();
         private VersionMetadataCollection? _vanillaVersions;
         private ConcurrentDictionary<string, IEnumerable<string>> _fabricVersions = new();
+        private ConcurrentDictionary<string, IEnumerable<string>> _quiltVersions = new();
         private ConcurrentDictionary<string, IEnumerable<ForgeVersion>>? _forgeVersions = new();
         private ConcurrentDictionary<string, IEnumerable<NeoForgeVersion>>? _neoForgeVersions = new();
         private IReadOnlyList<LiteLoaderVersion>? _liteLoaderVersions;
@@ -93,6 +97,7 @@ namespace Gml.Core.Helpers.Profiles
         }
 
         public async Task<IGameProfile?> AddProfile(string name,
+            string displayName,
             string version,
             string loaderVersion,
             GameLoader loader,
@@ -105,7 +110,7 @@ namespace Gml.Core.Helpers.Profiles
             if (string.IsNullOrEmpty(version))
                 ThrowHelper.ThrowArgumentNullException<string>(version);
 
-            var profile = new GameProfile(name, version, loader)
+            var profile = new GameProfile(name, displayName, version, loader)
             {
                 ProfileProcedures = this,
                 ServerProcedures = this,
@@ -115,8 +120,15 @@ namespace Gml.Core.Helpers.Profiles
                 Description = description,
                 IconBase64 = icon
             };
-
             await AddProfile(profile);
+
+            await AddFolderToWhiteList(profile, [
+                new LocalFolderInfo("saves"),
+                new LocalFolderInfo("logs"),
+                new LocalFolderInfo("resourcepacks"),
+                new LocalFolderInfo("crash-reports"),
+                new LocalFolderInfo("config")
+            ]);
 
             return profile;
         }
@@ -141,6 +153,8 @@ namespace Gml.Core.Helpers.Profiles
                 case GameLoader.LiteLoader:
                     return versions.Any(c => c.Equals(loaderVersion));
                 case GameLoader.NeoForge:
+                    return versions.Any(c => c.Equals(loaderVersion));
+                case GameLoader.Quilt:
                     return versions.Any(c => c.Equals(loaderVersion));
                 default:
                     throw new ArgumentOutOfRangeException(nameof(dtoGameLoader), dtoGameLoader, null);
@@ -268,7 +282,7 @@ namespace Gml.Core.Helpers.Profiles
                 }
                 else
                 {
-                    using (var algorithm = new SHA256Managed())
+                    using (var algorithm = SHA1.Create())
                     {
                         hash = SystemHelper.CalculateFileHash(c.FullName, algorithm);
                         _fileHashCache[c.FullName] = hash;
@@ -308,7 +322,7 @@ namespace Gml.Core.Helpers.Profiles
             var jvmArgs = new List<string>();
             var gameArguments = new List<string>();
 
-            if (profile.JvmArguments is not null)
+            if (!string.IsNullOrEmpty(profile.JvmArguments))
                 jvmArgs.Add(profile.JvmArguments);
 
             var files =
@@ -348,6 +362,7 @@ namespace Gml.Core.Helpers.Profiles
                 return new GameProfileInfo
                 {
                     ProfileName = profile.Name,
+                    DisplayName = profile.DisplayName,
                     Description = profile.Description,
                     IconBase64 = profile.IconBase64,
                     JvmArguments = profile.JvmArguments ?? string.Empty,
@@ -368,6 +383,7 @@ namespace Gml.Core.Helpers.Profiles
             return new GameProfileInfo
             {
                 ProfileName = profile.Name,
+                DisplayName = profile.DisplayName,
                 Arguments = string.Empty,
                 JavaPath = string.Empty,
                 State = profile.State,
@@ -426,12 +442,13 @@ namespace Gml.Core.Helpers.Profiles
             }
             finally
             {
-                profile.State = ProfileState.Ready;
+                profile.State = ProfileState.NeedCompile;
             }
         }
 
         public async Task PackProfile(IGameProfile profile)
         {
+            await profile.SetState(ProfileState.Packing);
             var fileInfos = await profile.GetAllProfileFiles(true);
 
             var batchSize = 50;
@@ -592,6 +609,8 @@ namespace Gml.Core.Helpers.Profiles
             //
             //     processed++;
             // }
+
+            await profile.SetState(ProfileState.Ready);
         }
 
         private string NormalizePath(string directory, string fileDirectory)
@@ -641,12 +660,14 @@ namespace Gml.Core.Helpers.Profiles
 
         public async Task UpdateProfile(IGameProfile profile,
             string newProfileName,
+            string displayName,
             Stream? icon,
             Stream? backgroundImage,
             string updateDtoDescription,
             bool isEnabled,
             string jvmArguments,
-            string gameArguments)
+            string gameArguments,
+            int priority)
         {
             var directory =
                 new DirectoryInfo(Path.Combine(_launcherInfo.InstallationDirectory, "clients", profile.Name));
@@ -666,8 +687,8 @@ namespace Gml.Core.Helpers.Profiles
                 ? profile.BackgroundImageKey
                 : await _gmlManager.Files.LoadFile(backgroundImage, "profile-backgrounds");
 
-            await UpdateProfile(profile, newProfileName, iconBase64, backgroundKey, updateDtoDescription,
-                needRenameFolder, directory, newDirectory, isEnabled, jvmArguments, gameArguments);
+            await UpdateProfile(profile, newProfileName, displayName, iconBase64, backgroundKey, updateDtoDescription,
+                needRenameFolder, directory, newDirectory, isEnabled, jvmArguments, gameArguments, priority);
         }
 
         private async Task<string> ConvertStreamToBase64Async(Stream stream)
@@ -680,23 +701,27 @@ namespace Gml.Core.Helpers.Profiles
             }
         }
 
-        private async Task UpdateProfile(IGameProfile profile, string newProfileName, string newIcon,
+        private async Task UpdateProfile(IGameProfile profile, string newProfileName, string displayName,
+            string newIcon,
             string backgroundImageKey,
             string newDescription, bool needRenameFolder, DirectoryInfo directory, DirectoryInfo newDirectory,
             bool isEnabled,
             string jvmArguments,
-            string gameArguments)
+            string gameArguments,
+            int priority)
         {
             profile.Name = newProfileName;
+            profile.DisplayName = displayName;
             profile.IconBase64 = newIcon;
             profile.BackgroundImageKey = backgroundImageKey;
             profile.Description = newDescription;
             profile.IsEnabled = isEnabled;
             profile.JvmArguments = jvmArguments;
             profile.GameArguments = gameArguments;
+            profile.Priority = priority;
 
             profile.GameLoader = new GameDownloaderProcedures(_launcherInfo, _storageService, profile, _notifications, _gmlManager.BugTracker);
-
+            profile.State = profile.State == ProfileState.Created ? profile.State : ProfileState.NeedCompile;
             await SaveProfiles();
             await RestoreProfiles();
 
@@ -771,6 +796,16 @@ namespace Gml.Core.Helpers.Profiles
             return baseProfile.GameLoader.GetAllFiles(needRestoreCache);
         }
 
+        public Task<IFileInfo[]> GetModsAsync(IGameProfile baseProfile)
+        {
+            return baseProfile.GameLoader.GetMods();
+        }
+
+        public Task<IFileInfo[]> GetOptionalsModsAsync(IGameProfile baseProfile)
+        {
+            return baseProfile.GameLoader.GetOptionalsMods();
+        }
+
         public async Task<IEnumerable<string>> GetAllowVersions(GameLoader gameLoader, string? minecraftVersion)
         {
             try
@@ -802,29 +837,32 @@ namespace Gml.Core.Helpers.Profiles
                             .Select(c => versionMapper.CreateInstaller(c).ForgeVersion.ForgeVersionName);
 
                     case GameLoader.Fabric:
-
-                        var fabricLoader = new FabricInstaller(new HttpClient());
-
-                        var loaders = await fabricLoader.GetLoaders(minecraftVersion);
-
-                        var versions = loaders
-                            .Where(c => !string.IsNullOrEmpty(c.Version))
-                            .OrderBy(c => c.Stable)
-                            .Select(c => c.Version!)
-                            .ToList()
-                            .AsReadOnly();
-
-                        if (!_fabricVersions.Any(c => c.Key == minecraftVersion))
+                        using (var client = new HttpClient())
                         {
-                            _fabricVersions[minecraftVersion] = versions;
+                            var fabricLoader = new FabricInstaller(client);
+
+                            var loaders = await fabricLoader.GetLoaders(minecraftVersion);
+
+                            var versions = loaders
+                                .Where(c => !string.IsNullOrEmpty(c.Version))
+                                .OrderBy(c => c.Stable)
+                                .Select(c => c.Version!)
+                                .ToList()
+                                .AsReadOnly();
+
+                            if (!_quiltVersions.Any(c => c.Key == minecraftVersion))
+                            {
+                                _quiltVersions[minecraftVersion] = versions;
+                            }
+
+                            if (_quiltVersions[minecraftVersion] is null || !_quiltVersions[minecraftVersion].Any())
+                            {
+                                throw new ArgumentOutOfRangeException(nameof(gameLoader), gameLoader, null);
+                            }
+
+                            return _quiltVersions[minecraftVersion];
                         }
 
-                        if (_fabricVersions[minecraftVersion] is null || !_fabricVersions[minecraftVersion].Any())
-                        {
-                            throw new ArgumentOutOfRangeException(nameof(gameLoader), gameLoader, null);
-                        }
-
-                        return _fabricVersions[minecraftVersion];
 
                     case GameLoader.LiteLoader:
                         var liteLoaderVersionLoader = new LiteLoaderInstaller(new HttpClient());
@@ -847,6 +885,32 @@ namespace Gml.Core.Helpers.Profiles
                         return _neoForgeVersions[minecraftVersion]
                             .Select(c => neoForgeVersionMapper.CreateInstaller(c).VersionName)
                             .Reverse();
+                    case GameLoader.Quilt:
+                        using (var client = new HttpClient())
+                        {
+                            var quiltLoader = new QuiltInstaller(client);
+
+                            var loaders = await quiltLoader.GetLoaders(minecraftVersion);
+
+                            var versions = loaders
+                                .Where(c => !string.IsNullOrEmpty(c.Version))
+                                .OrderBy(c => c.Stable)
+                                .Select(c => c.Version!)
+                                .ToList()
+                                .AsReadOnly();
+
+                            if (!_fabricVersions.Any(c => c.Key == minecraftVersion))
+                            {
+                                _fabricVersions[minecraftVersion] = versions;
+                            }
+
+                            if (_fabricVersions[minecraftVersion] is null || !_fabricVersions[minecraftVersion].Any())
+                            {
+                                throw new ArgumentOutOfRangeException(nameof(gameLoader), gameLoader, null);
+                            }
+
+                            return _fabricVersions[minecraftVersion];
+                        }
                     default:
                         throw new ArgumentOutOfRangeException(nameof(gameLoader), gameLoader, null);
                 }
@@ -946,6 +1010,40 @@ namespace Gml.Core.Helpers.Profiles
             }
 
         }
+
+        public async Task<IMod> AddMod(IGameProfile profile, string fileName, Stream streamData)
+        {
+            var file = await profile.GameLoader.AddMod(fileName, streamData).ConfigureAwait(false);
+
+            return new LocalProfileMod
+            {
+                Name = Path.GetFileNameWithoutExtension(file.Name),
+            };
+        }
+
+        public async Task<IMod> AddOptionalMod(IGameProfile profile, string fileName, Stream streamData)
+        {
+            var extension = Path.GetExtension(fileName);
+
+            var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(fileName);
+
+            if (!fileNameWithoutExtension.EndsWith("-optional-mod"))
+            {
+                fileName = $"{fileNameWithoutExtension}-optional-mod{extension}";
+            }
+            var file = await profile.GameLoader.AddMod(fileName, streamData).ConfigureAwait(false);
+
+            return new LocalProfileMod
+            {
+                Name = Path.GetFileNameWithoutExtension(file.Name),
+            };
+        }
+
+        public Task<bool> RemoveMod(IGameProfile profile, string modName)
+        {
+            return profile.GameLoader.RemoveMod(modName);
+        }
+
 
         private void RemoveWhiteListFolderIfNotExists(IGameProfile profile, IFolderInfo folder)
         {

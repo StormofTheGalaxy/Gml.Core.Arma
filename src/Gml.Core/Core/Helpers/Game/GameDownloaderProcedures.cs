@@ -7,6 +7,8 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
 using CmlLib.Core;
+using CmlLib.Core.Java;
+using CmlLib.Core.Rules;
 using Gml.Common;
 using Gml.Core.Launcher;
 using Gml.Core.Services.Storage;
@@ -63,8 +65,12 @@ namespace Gml.Core.Helpers.Game
             return _gameLoader.DownloadGame(loader, version, launchVersion, bootstrapProgram);
         }
 
-        public async Task<Process> CreateProcess(IStartupOptions startupOptions, IUser user, bool needDownload,
-            string[] jvmArguments, string[] gameArguments)
+        public async Task<Process> CreateProcess(
+            IStartupOptions startupOptions,
+            IUser user,
+            bool needDownload,
+            string[] jvmArguments,
+            string[] gameArguments)
         {
             var process = await _gameLoader.GetProcessAsync(startupOptions, user, needDownload, jvmArguments, gameArguments);
 
@@ -82,6 +88,8 @@ namespace Gml.Core.Helpers.Game
                 SearchOption.AllDirectories));
             directoryFiles.AddRange(Directory.GetFiles(Path.Combine(anyLauncher.MinecraftPath.BasePath), "*.*",
                 SearchOption.AllDirectories));
+
+            AddNatives(anyLauncher, directoryFiles);
 
             var basePath = Path.Combine(anyLauncher.MinecraftPath.BasePath);
             var excludedDirectories = new[] { "client", "libraries", "resources" }
@@ -108,6 +116,105 @@ namespace Gml.Core.Helpers.Game
                 .ToArray();
 
             return localFilesInfo;
+        }
+
+        private void AddNatives(MinecraftLauncher anyLauncher, List<string> directoryFiles)
+        {
+            var clientDirectory = Path.Combine(anyLauncher.MinecraftPath.BasePath, "client");
+
+            if (Directory.Exists(clientDirectory))
+            {
+                foreach (var directory in Directory.GetDirectories(clientDirectory))
+                {
+                    var nativesDirectory = Path.Combine(directory, "natives");
+                    if (Directory.Exists(nativesDirectory))
+                    {
+                        var natives = Directory.GetFiles(nativesDirectory, "*.*", SearchOption.AllDirectories);
+                        directoryFiles.AddRange(natives);
+                    }
+                }
+            }
+        }
+
+        private async Task<IFileInfo[]> GetModsFromDirectory(string pattern)
+        {
+            var modsDirectory = GetModsDirectory();
+
+            if (!Directory.Exists(modsDirectory))
+                return [];
+
+            var files = Directory.GetFiles(modsDirectory, pattern, SearchOption.AllDirectories);
+            return await GetHashFiles(files, []).ConfigureAwait(false);
+        }
+
+        private string GetModsDirectory()
+        {
+            var anyLauncher = _gameLoader.AnyLauncher;
+
+            return Path.Combine(anyLauncher.MinecraftPath.BasePath, "mods");;
+        }
+
+        public async Task<FileInfo> AddMod(string fileName, Stream streamData)
+        {
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                throw new ArgumentException("File name cannot be null or empty.", nameof(fileName));
+            }
+
+            if (streamData == null || !streamData.CanRead)
+            {
+                throw new ArgumentException("Invalid stream data.", nameof(streamData));
+            }
+
+            var modsDirectory = GetModsDirectory();
+
+            if (!Directory.Exists(modsDirectory))
+            {
+                Directory.CreateDirectory(modsDirectory);
+            }
+
+            var filePath = Path.Combine(modsDirectory, fileName);
+
+            await using var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write);
+            await streamData.CopyToAsync(fileStream);
+
+            return new FileInfo(filePath);
+        }
+
+        public Task<bool> RemoveMod(string fileName)
+        {
+            try
+            {
+                var modsDirectory = GetModsDirectory();
+
+                var filePath = Path.Combine(modsDirectory, fileName);
+
+                if (!File.Exists(filePath))
+                    return Task.FromResult(true);
+
+                File.Delete(filePath);
+                return Task.FromResult(true);
+
+            }
+            catch (Exception exception)
+            {
+                _bugTracker.CaptureException(exception);
+                return Task.FromResult(false);
+            }
+
+            return Task.FromResult(false);
+        }
+
+        public async Task<IFileInfo[]> GetMods()
+        {
+            var allMods = await GetModsFromDirectory("*.jar").ConfigureAwait(false);
+
+            return allMods.Where(mod => !mod.Name.Contains("-optional-mod")).ToArray();
+        }
+
+        public async Task<IFileInfo[]> GetOptionalsMods()
+        {
+            return await GetModsFromDirectory("*-optional-mod.jar").ConfigureAwait(false);
         }
 
         public bool GetLauncher(string launcherKey, out object launcher)
@@ -207,9 +314,17 @@ namespace Gml.Core.Helpers.Game
         private static bool GetJavaRuntimeFolder(string osName, string osArchitecture, MinecraftLauncher launcher,
             out string runtimeFolder)
         {
+            var osRule = new LauncherOSRule
+            {
+                Name = osName,
+                Arch = osArchitecture
+            };
+
+            var osDirectory = MinecraftJavaManifestResolver.GetOSNameForJava(osRule);
+
             runtimeFolder = Directory
                 .GetDirectories(
-                    launcher.MinecraftPath.Runtime, $"{osName}??{osArchitecture}", SearchOption.AllDirectories)
+                    launcher.MinecraftPath.Runtime, osDirectory, SearchOption.AllDirectories)
                 .FirstOrDefault() ?? string.Empty;
 
             if (string.IsNullOrEmpty(runtimeFolder) && osName == "linux")
@@ -235,11 +350,9 @@ namespace Gml.Core.Helpers.Game
                 }
                 else
                 {
-                    using (var algorithm = new SHA256Managed())
-                    {
-                        hash = SystemHelper.CalculateFileHash(c, algorithm);
-                        _fileHashCache[c] = hash;
-                    }
+                    using var algorithm = SHA1.Create();
+                    hash = SystemHelper.CalculateFileHash(c, algorithm);
+                    _fileHashCache[c] = hash;
                 }
 
                 var path = additionalPath.Aggregate(string.Empty, Path.Combine);

@@ -1,11 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Gml.Models.Converters;
 using Gml.Models.Enums;
+using Gml.Models.Mods;
 using GmlCore.Interfaces.Enums;
 using GmlCore.Interfaces.Launcher;
+using GmlCore.Interfaces.Mods;
 using GmlCore.Interfaces.Procedures;
 using GmlCore.Interfaces.Servers;
 using GmlCore.Interfaces.System;
@@ -16,17 +20,22 @@ namespace Gml.Models
 {
     public class BaseProfile : IGameProfile
     {
-        private bool IsDisposed;
+        private bool _isDisposed;
+        // private Lazy<IMod> _mods = new Lazy<IMod>(async () =>
+        // {
+        //     return await GetModsAsync();
+        // });
 
         public BaseProfile()
         {
         }
 
-        internal BaseProfile(string name, string gameVersion, GameLoader loader)
+        internal BaseProfile(string name, string displayName, string gameVersion, GameLoader loader)
         {
             Loader = loader;
             GameVersion = gameVersion;
             Name = name;
+            DisplayName = displayName;
 
             IsValidProfile = NullableBool.Undefined;
         }
@@ -40,6 +49,9 @@ namespace Gml.Models
         [JsonIgnore] public IGameDownloaderProcedures GameLoader { get; set; }
 
         public string Name { get; set; }
+        public string DisplayName { get; set; }
+        public bool CanEdit => State != ProfileState.Loading && State != ProfileState.Packing;
+        public int Priority { get; set; }
         public bool IsEnabled { get; set; }
         public string GameVersion { get; set; }
         public string? LaunchVersion { get; set; }
@@ -60,6 +72,8 @@ namespace Gml.Models
         public List<string> UserWhiteListGuid { get; set; } = [];
 
         public List<IProfileServer> Servers { get; set; } = new();
+        public List<IMod> OptionalMods { get; } = [];
+        public List<IMod> Mods { get; } = [];
 
         public DateTimeOffset CreateDate { get; set; }
 
@@ -146,10 +160,10 @@ namespace Gml.Models
 
         public void Dispose()
         {
-            if (IsDisposed) return;
+            if (_isDisposed) return;
 
 
-            IsDisposed = true;
+            _isDisposed = true;
         }
 
         public Task<bool> CheckIsLoaded()
@@ -166,19 +180,19 @@ namespace Gml.Models
 
         private void CheckDispose()
         {
-            if (IsDisposed)
+            if (_isDisposed)
                 throw new ObjectDisposedException(Name);
         }
 
         public void Dispose(bool disposing)
         {
-            if (IsDisposed) return;
+            if (_isDisposed) return;
 
             if (disposing)
             {
             }
 
-            IsDisposed = true;
+            _isDisposed = true;
         }
 
         public virtual void AddServer(IProfileServer server)
@@ -196,9 +210,18 @@ namespace Gml.Models
             return ProfileProcedures.CreateModsFolder(this);
         }
 
-        public Task<ICollection<IFileInfo>> GetProfileFiles(string osName, string osArchitecture)
+        public async Task<ICollection<IFileInfo>> GetProfileFiles(string osName, string osArchitecture)
         {
-            return ProfileProcedures.GetProfileFiles(this, osName, osArchitecture);
+            try
+            {
+                return await ProfileProcedures.GetProfileFiles(this, osName, osArchitecture);
+            }
+            catch (Exception exception)
+            {
+                Console.WriteLine(exception);
+                await SetState(ProfileState.Error);
+                return [];
+            }
         }
 
         public Task<IFileInfo[]> GetAllProfileFiles(bool needRestoreCache = false)
@@ -209,6 +232,59 @@ namespace Gml.Models
         public Task CreateUserSessionAsync(IUser user)
         {
             return ProfileProcedures.CreateUserSessionAsync(this, user);
+        }
+
+        public async Task<IEnumerable<IMod>> GetModsAsync()
+        {
+            var files = await ProfileProcedures.GetModsAsync(this);
+
+            return files.Select(file => new LocalProfileMod
+            {
+                Name = Path.GetFileNameWithoutExtension(file.Name),
+            }).OrderBy(c => c.Name);
+        }
+
+        public async Task<IEnumerable<IMod>> GetOptionalsModsAsync()
+        {
+            var files = await ProfileProcedures.GetOptionalsModsAsync(this);
+
+            return files.Select(file => new LocalProfileMod
+            {
+                Name = Path.GetFileNameWithoutExtension(file.Name),
+            }).OrderBy(c => c.Name);
+        }
+
+        public async Task<IMod> AddMod(string fileName, Stream streamData)
+        {
+            await SetState(ProfileState.NeedCompile);
+            return await ProfileProcedures.AddMod(this, fileName, streamData).ConfigureAwait(false);
+        }
+
+        public async Task<IMod> AddOptionalMod(string fileName, Stream streamData)
+        {
+            await SetState(ProfileState.NeedCompile);
+            return await ProfileProcedures.AddOptionalMod(this, fileName, streamData).ConfigureAwait(false);
+        }
+
+        public async Task<bool> RemoveMod(string modName)
+        {
+            await SetState(ProfileState.NeedCompile);
+            return await  ProfileProcedures.RemoveMod(this, modName).ConfigureAwait(false);
+        }
+
+        public Task SetState(ProfileState state)
+        {
+            State = state;
+
+
+
+            return ProfileProcedures.SaveProfiles();
+        }
+
+        public Task<bool> CanLoadMods()
+        {
+            return Task.FromResult(Loader != GmlCore.Interfaces.Enums.GameLoader.Undefined &&
+                                   Loader != GmlCore.Interfaces.Enums.GameLoader.Vanilla);
         }
     }
 }
