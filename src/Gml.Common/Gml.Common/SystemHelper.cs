@@ -7,17 +7,26 @@ namespace Gml.Common
 {
     public static class SystemHelper
     {
-        public static string CalculateFileHash(string filePath, HashAlgorithm algorithm)
+       public static string CalculateFileHash(string filePath, HashAlgorithm algorithm)
         {
-            using var file = File.OpenRead(filePath);
+            var fileInfo = new FileInfo(filePath);
             
-            // Instead of calculating hash, get file length
-            long fileLength = file.Length;
+            // Combine file attributes that can be obtained quickly
+            string fileName = Path.GetFileName(filePath);
+            long fileLength = fileInfo.Length;
+            long lastWriteTimeTicks = fileInfo.LastWriteTimeUtc.Ticks;
             
-            // Convert length to string to maintain the same return type
-            return fileLength.ToString();
+            // Create a unique identifier from these attributes
+            string uniqueId = $"{fileName}_{fileLength}_{lastWriteTimeTicks}";
+            
+            // Convert to a format similar to a hash (hex string)
+            using (var md5 = MD5.Create())
+            {
+                byte[] inputBytes = System.Text.Encoding.UTF8.GetBytes(uniqueId);
+                byte[] hashBytes = md5.ComputeHash(inputBytes);
+                return BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
+            }
         }
-
         public static string GetStringOsType(OsType osType)
         {
             switch (osType)
