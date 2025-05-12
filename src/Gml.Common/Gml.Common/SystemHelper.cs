@@ -14,10 +14,9 @@ namespace Gml.Common
             // Combine file attributes that can be obtained quickly
             string fileName = Path.GetFileName(filePath);
             long fileLength = fileInfo.Length;
-            long lastWriteTimeTicks = fileInfo.LastWriteTimeUtc.Ticks;
             
             // Create a unique identifier from these attributes
-            string uniqueId = $"{fileName}_{fileLength}_{lastWriteTimeTicks}";
+            string uniqueId = $"{fileName}_{fileLength}";
             
             // Convert to a format similar to a hash (hex string)
             using (var md5 = MD5.Create())
